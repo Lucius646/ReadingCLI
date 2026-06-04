@@ -1,0 +1,7 @@
+/target/
+/.reading/
+/.superpowers/
+/novel.txt
+
+*.tmp
+*.log
