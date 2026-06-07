@@ -8,6 +8,7 @@ fn session_can_move_next_and_previous() {
     let metadata = BookMetadata {
         book_path: PathBuf::from("novel.txt"),
         current_block: 0,
+        current_offset: 0,
         block_size: 1200,
     };
 
@@ -28,6 +29,7 @@ fn session_can_quit() {
     let metadata = BookMetadata {
         book_path: PathBuf::from("novel.txt"),
         current_block: 0,
+        current_offset: 0,
         block_size: 1200,
     };
 

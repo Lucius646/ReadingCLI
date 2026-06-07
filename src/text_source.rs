@@ -85,4 +85,68 @@ impl TextSource {
         let text = String::from_utf8(buffer)?;
         Ok(text)
     }
+
+    pub fn read_from_offset(&self, offset: u64, max_bytes: usize) -> Result<String> {
+        let file_len = self.file_len();
+
+        if offset >= file_len {
+            return Ok(String::new());
+        }
+
+        let read_len = (file_len - offset).min(max_bytes as u64) as usize;
+
+        let mut file = File::open(&self.path)?;
+        file.seek(SeekFrom::Start(offset))?;
+
+        let mut buffer = vec![0; read_len];
+        file.read_exact(&mut buffer)?;
+
+        while String::from_utf8(buffer.clone()).is_err() {
+            buffer.pop();
+
+            if buffer.is_empty() {
+                return Ok(String::new());
+            }
+        }
+
+        let text = String::from_utf8(buffer)?;
+        Ok(text)
+    }
+
+    pub fn read_before_offset(&self, offset: u64, max_bytes: usize) ->Result<(u64, String)> {
+        let file_len = self.file_len();
+        let end = offset.min(file_len);
+
+        if end == 0 {
+            return Ok((0, String::new()));
+        }
+
+        let start = end.saturating_sub(max_bytes as u64);
+        let read_len = (end - start) as usize;
+
+        let mut file = File::open(&self.path)?;
+        file.seek(SeekFrom::Start(start))?;
+
+        let mut buffer = vec![0; read_len];
+        file.read_exact(&mut buffer)?;
+
+        let mut actual_start = start;
+
+        while String::from_utf8(buffer.clone()).is_err() {
+            if buffer.is_empty() {
+                return Ok((end, String::new()));
+            }
+
+            buffer.remove(0);
+            actual_start += 1;
+        }
+
+        let text = String::from_utf8(buffer)?;
+        Ok((actual_start, text))
+
+    }
+    
+    pub fn file_len(&self) -> u64 {
+        self.block_offsets.last().copied().unwrap_or(0)
+    }
 }

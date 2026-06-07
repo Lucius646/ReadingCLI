@@ -48,6 +48,7 @@ fn load_or_create_metadata(path: PathBuf) -> Result<BookMetadata> {
         Ok(BookMetadata { 
             book_path: path, 
             current_block: 0, 
+            current_offset: 0,
             block_size: 1200,
         })
     }

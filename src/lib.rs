@@ -4,3 +4,4 @@ pub mod metadata;
 pub mod session;
 pub mod text_source;
 pub mod tui;
+pub mod page_layout;
