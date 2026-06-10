@@ -3,12 +3,12 @@ use std::io::{self, Write};
 use anyhow::Result;
 use crossterm::{
     cursor,
-    event::{self, Event, KeyCode},
+    event::{self, Event, KeyCode, KeyEventKind},
     execute, 
     terminal::{self, ClearType},
 };
 
-use crate::{page_index, page_layout::{Page, layout_page}};
+use crate::page_layout::{layout_page, Page};
 use crate::page_index::PageIndex;
 use crate::session::ReadingSession;
 use crate::text_source::TextSource;
@@ -20,21 +20,6 @@ pub fn run_reader(session: &mut ReadingSession, text_source: &mut TextSource) ->
     let (columns, rows) = terminal::size()?;
     let body_rows = rows.saturating_sub(2);
     let page_index = PageIndex::build(text_source, columns, body_rows)?;
-
-    std::fs::create_dir_all(".reading")?;
-    let preview_len = page_index.page_starts.len().min(20);
-    std::fs::write(
-        ".reading/page-index-debug.log",
-        format!(
-            "columns={}\nrows={}\nbody_rows={}\npage_count={}\nfirst_page_starts={:?}\n",
-            columns,
-            rows,
-            body_rows,
-            page_index.page_count(),
-            &page_index.page_starts[..preview_len],
-      ),
-    )?;
-
     let mut current_page_index = page_index.find_page_by_offset(session.metadata.current_offset);
 
     if let Some(page_start) = page_index.page_start(current_page_index) {
@@ -42,9 +27,13 @@ pub fn run_reader(session: &mut ReadingSession, text_source: &mut TextSource) ->
     }
 
     loop {
-        let current_page = draw(session, text_source)?;
+        draw(session, text_source)?;
 
         if let Event::Key(key_event) = event::read()? {
+            if key_event.kind != KeyEventKind::Press {
+                continue;
+            }
+
             match key_event.code {
                 KeyCode::Char('n') => {
                     if current_page_index + 1 < page_index.page_count() {

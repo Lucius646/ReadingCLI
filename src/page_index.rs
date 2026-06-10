@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::page_layout::layout_page;
-use crate::text_source::{self, TextSource};
+use crate::text_source::TextSource;
 
 pub struct PageIndex {
     pub columns: u16,
