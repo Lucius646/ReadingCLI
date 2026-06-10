@@ -8,8 +8,8 @@ use crossterm::{
     terminal::{self, ClearType},
 };
 
-use crate::page_layout::{layout_page, Page};
-
+use crate::{page_index, page_layout::{Page, layout_page}};
+use crate::page_index::PageIndex;
 use crate::session::ReadingSession;
 use crate::text_source::TextSource;
 
@@ -17,25 +17,52 @@ pub fn run_reader(session: &mut ReadingSession, text_source: &mut TextSource) ->
     terminal::enable_raw_mode()?;
     execute!(io::stdout(), terminal::EnterAlternateScreen, cursor::Hide)?;
 
+    let (columns, rows) = terminal::size()?;
+    let body_rows = rows.saturating_sub(2);
+    let page_index = PageIndex::build(text_source, columns, body_rows)?;
+
+    std::fs::create_dir_all(".reading")?;
+    let preview_len = page_index.page_starts.len().min(20);
+    std::fs::write(
+        ".reading/page-index-debug.log",
+        format!(
+            "columns={}\nrows={}\nbody_rows={}\npage_count={}\nfirst_page_starts={:?}\n",
+            columns,
+            rows,
+            body_rows,
+            page_index.page_count(),
+            &page_index.page_starts[..preview_len],
+      ),
+    )?;
+
+    let mut current_page_index = page_index.find_page_by_offset(session.metadata.current_offset);
+
+    if let Some(page_start) = page_index.page_start(current_page_index) {
+        session.metadata.current_offset = page_start;
+    }
+
     loop {
         let current_page = draw(session, text_source)?;
 
         if let Event::Key(key_event) = event::read()? {
             match key_event.code {
                 KeyCode::Char('n') => {
-                    session.move_to_offset(current_page.end_offset);
+                    if current_page_index + 1 < page_index.page_count() {
+                        current_page_index += 1;
+
+                        if let Some(page_start) = page_index.page_start(current_page_index) {
+                            session.metadata.current_offset = page_start;
+                        }
+                    }
                 }
                 KeyCode::Char('p') => {
-                    let (columns, rows) = terminal::size()?;
-                    let body_rows = rows.saturating_sub(2);
+                    if current_page_index > 0 {
+                        current_page_index -= 1;
 
-                    let previous_offset = find_previous_page_start(
-                        text_source, 
-                        session.metadata.current_offset, 
-                        columns, 
-                        body_rows
-                    )?;
-                    session.metadata.current_offset = previous_offset;
+                        if let Some(page_start) = page_index.page_start(current_page_index) {
+                            session.metadata.current_offset = page_start;
+                        }
+                    }
                 }
                 KeyCode::Char('q') => {
                     session.quit();
@@ -80,71 +107,28 @@ fn draw(session: &mut ReadingSession, text_source: &mut TextSource) -> Result<Pa
     );
 
     writeln!(stdout, "{}", page.text)?;
-    writeln!(
+    execute!(
         stdout,
-        "[offset {}] n: next | p: previous | q: quit",
-        session.metadata.current_offset
+        cursor::MoveTo(0, rows.saturating_sub(1)),
+        terminal::Clear(ClearType::CurrentLine)
+    )?;
+
+    let file_len = text_source.file_len();
+    let progress = if file_len == 0 {
+        0.0
+    } else {
+        session.metadata.current_offset as f64 / file_len as f64 * 100.0
+    };
+
+    write!(
+        stdout,
+        "[offset {}/{} {:.2}%] n: next | p: previous | q: quit",
+        session.metadata.current_offset,
+        file_len,
+        progress
     )?;
 
     stdout.flush()?;
 
     Ok(page)
-}
-
-fn find_previous_page_start(text_source: &TextSource, current_offset: u64, columns: u16, rows: u16) -> Result<u64> {
-    if current_offset == 0 {
-        return Ok(0);
-    }
-
-    let window_bytes = estimate_page_window_bytes(columns, rows);
-
-    let (candidate_start, candidate) = 
-        text_source.read_before_offset(current_offset, window_bytes)?;
-
-    if candidate.is_empty() {
-        return Ok(0);
-    }
-
-    let valid_offsets: Vec<u64> = candidate
-        .char_indices()
-        .map(|(byte_index, _ch)| candidate_start + byte_index as u64)
-        .filter(|offset| * offset < current_offset)
-        .collect();
-
-    if valid_offsets.is_empty() {
-        return Ok(0);
-    }
-    
-    let mut low = 0usize;
-    let mut high = valid_offsets.len();
-    while low < high {
-        let mid = low + (high - low) / 2;
-        let start_offset = valid_offsets[mid];
-
-        let candidate = text_source.read_from_offset(start_offset, window_bytes)?;
-        let page = layout_page(&candidate, start_offset, columns, rows);
-
-        if page.end_offset >= current_offset {
-            let overlap = page.end_offset - current_offset;
-            
-            if overlap <= 4 {
-                return Ok(start_offset);
-            }
-            // 一个 utf8 字符最多 4 字节
-            high = mid;
-        } else {
-            low = mid + 1;
-        }
-    }
-
-    if low < valid_offsets.len() {
-        Ok(valid_offsets[low])
-    } else {
-        Ok(valid_offsets[valid_offsets.len() - 1])
-    }
-}
-
-fn estimate_page_window_bytes(columns: u16, rows: u16) -> usize {
-    let cells = columns as usize * rows as usize;
-    cells.saturating_mul(4)
 }
