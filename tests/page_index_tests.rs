@@ -1,5 +1,5 @@
-use reading_cli::{page_index::PageIndex};
 use anyhow::Result;
+use reading_cli::page_index::PageIndex;
 use reading_cli::text_source::TextSource;
 use std::fs;
 use tempfile::NamedTempFile;
@@ -10,7 +10,7 @@ fn page_index_can_report_page_count() {
         columns: 100,
         rows: 28,
         page_starts: vec![0, 1200, 2400],
-    } ;
+    };
     assert_eq!(index.page_count(), 3);
 }
 
@@ -47,8 +47,8 @@ fn page_index_returns_page_start_by_page_number() {
 fn page_index_builds_from_text_source() -> Result<()> {
     let file = NamedTempFile::new()?;
     fs::write(file.path(), "一二三四五六七八九十")?;
-    
-    let text_source = TextSource::new(file.path().to_path_buf(), 1200, 10)?;
+
+    let text_source = TextSource::new(file.path().to_path_buf())?;
 
     let index = PageIndex::build(&text_source, 4, 2)?;
 

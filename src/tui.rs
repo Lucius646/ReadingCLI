@@ -4,18 +4,17 @@ use anyhow::Result;
 use crossterm::{
     cursor,
     event::{self, Event, KeyCode, KeyEventKind},
-    execute, 
+    execute,
     terminal::{self, ClearType},
 };
 
-use crate::page_layout::{layout_page, Page};
 use crate::page_index::PageIndex;
+use crate::page_layout::{Page, layout_page};
 use crate::session::ReadingSession;
 use crate::text_source::TextSource;
 
 pub fn run_reader(session: &mut ReadingSession, text_source: &mut TextSource) -> Result<()> {
-    terminal::enable_raw_mode()?;
-    execute!(io::stdout(), terminal::EnterAlternateScreen, cursor::Hide)?;
+    let _terminal = TerminalGuard::enter()?;
 
     let (mut columns, rows) = terminal::size()?;
     let mut body_rows = rows.saturating_sub(2);
@@ -42,7 +41,12 @@ pub fn run_reader(session: &mut ReadingSession, text_source: &mut TextSource) ->
             }
         }
 
-        draw(session, text_source, current_page_index, page_index.page_count())?;
+        draw(
+            session,
+            text_source,
+            current_page_index,
+            page_index.page_count(),
+        )?;
 
         if let Event::Key(key_event) = event::read()? {
             if key_event.kind != KeyEventKind::Press {
@@ -80,14 +84,29 @@ pub fn run_reader(session: &mut ReadingSession, text_source: &mut TextSource) ->
             break;
         }
     }
-    execute!(io::stdout(), cursor::Show, terminal::LeaveAlternateScreen)?;
-    terminal::disable_raw_mode()?;
-
     Ok(())
 }
 
+struct TerminalGuard;
+
+impl TerminalGuard {
+    fn enter() -> Result<Self> {
+        terminal::enable_raw_mode()?;
+        execute!(io::stdout(), terminal::EnterAlternateScreen, cursor::Hide)?;
+
+        Ok(Self)
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = execute!(io::stdout(), cursor::Show, terminal::LeaveAlternateScreen);
+        let _ = terminal::disable_raw_mode();
+    }
+}
+
 fn draw(
-    session: &mut ReadingSession, 
+    session: &mut ReadingSession,
     text_source: &mut TextSource,
     current_page_index: usize,
     page_count: usize,
@@ -103,10 +122,7 @@ fn draw(
     let (columns, rows) = terminal::size()?;
     let body_rows = rows.saturating_sub(2); // Reserve 2 rows for title and status
 
-    let candidate = text_source.read_from_offset(
-        session.metadata.current_offset,
-        64 * 1024,
-    )?;
+    let candidate = text_source.read_from_offset(session.metadata.current_offset, 64 * 1024)?;
 
     let page = layout_page(
         &candidate,

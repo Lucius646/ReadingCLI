@@ -18,11 +18,7 @@ pub fn run() -> Result<()> {
 
             let mut session = ReadingSession::new(metadata);
 
-            let mut text_source = TextSource::new(
-                session.metadata.book_path.clone(),
-                session.metadata.block_size,
-                10,
-            )?;
+            let mut text_source = TextSource::new(session.metadata.book_path.clone())?;
 
             tui::run_reader(&mut session, &mut text_source)?;
 
@@ -35,21 +31,24 @@ pub fn run() -> Result<()> {
     }
 
     Ok(())
-} 
+}
 
 fn load_or_create_metadata(path: PathBuf) -> Result<BookMetadata> {
     let metadata_path = ".reading/current-book.json";
-    
+    let book_path = normalize_book_path(path);
+
     if fs::exists(metadata_path)? {
         let json = fs::read_to_string(metadata_path)?;
-        let metadata = serde_json::from_str(&json)?;
-        Ok(metadata) 
-    } else {
-        Ok(BookMetadata { 
-            book_path: path, 
-            current_block: 0, 
-            current_offset: 0,
-            block_size: 1200,
-        })
+        let metadata: BookMetadata = serde_json::from_str(&json)?;
+
+        if normalize_book_path(metadata.book_path.clone()) == book_path {
+            return Ok(metadata);
+        }
     }
+
+    Ok(BookMetadata::new(book_path))
+}
+
+fn normalize_book_path(path: PathBuf) -> PathBuf {
+    fs::canonicalize(&path).unwrap_or(path)
 }

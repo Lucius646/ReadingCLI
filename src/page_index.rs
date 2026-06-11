@@ -21,7 +21,7 @@ impl PageIndex {
             page_starts.push(current_offset);
 
             let candidate = text_source.read_from_offset(current_offset, read_size)?;
-            let page = layout_page(&candidate,current_offset, columns, rows);
+            let page = layout_page(&candidate, current_offset, columns, rows);
 
             if page.end_offset <= current_offset {
                 break;
@@ -56,4 +56,3 @@ impl PageIndex {
         self.page_starts.get(page_index).copied()
     }
 }
-
