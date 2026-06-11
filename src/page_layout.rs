@@ -1,3 +1,5 @@
+use unicode_width::UnicodeWidthChar;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page {
     pub text: String,
@@ -50,9 +52,5 @@ pub fn layout_page(text: &str, start_offset: u64, columns: u16, rows: u16) -> Pa
 }
 
 fn char_display_width(ch: char) -> usize {
-    if ch.is_ascii() {
-        1
-    } else {
-        2
-    }
+    ch.width().unwrap_or(0)
 }

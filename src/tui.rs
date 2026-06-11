@@ -17,9 +17,9 @@ pub fn run_reader(session: &mut ReadingSession, text_source: &mut TextSource) ->
     terminal::enable_raw_mode()?;
     execute!(io::stdout(), terminal::EnterAlternateScreen, cursor::Hide)?;
 
-    let (columns, rows) = terminal::size()?;
-    let body_rows = rows.saturating_sub(2);
-    let page_index = PageIndex::build(text_source, columns, body_rows)?;
+    let (mut columns, rows) = terminal::size()?;
+    let mut body_rows = rows.saturating_sub(2);
+    let mut page_index = PageIndex::build(text_source, columns, body_rows)?;
     let mut current_page_index = page_index.find_page_by_offset(session.metadata.current_offset);
 
     if let Some(page_start) = page_index.page_start(current_page_index) {
@@ -27,7 +27,22 @@ pub fn run_reader(session: &mut ReadingSession, text_source: &mut TextSource) ->
     }
 
     loop {
-        draw(session, text_source)?;
+        let (latest_columns, latest_rows) = terminal::size()?;
+        let latest_body_rows = latest_rows.saturating_sub(2);
+
+        if latest_columns != columns || latest_body_rows != body_rows {
+            columns = latest_columns;
+            body_rows = latest_body_rows;
+
+            page_index = PageIndex::build(text_source, columns, body_rows)?;
+            current_page_index = page_index.find_page_by_offset(session.metadata.current_offset);
+
+            if let Some(page_start) = page_index.page_start(current_page_index) {
+                session.metadata.current_offset = page_start;
+            }
+        }
+
+        draw(session, text_source, current_page_index, page_index.page_count())?;
 
         if let Event::Key(key_event) = event::read()? {
             if key_event.kind != KeyEventKind::Press {
@@ -71,7 +86,12 @@ pub fn run_reader(session: &mut ReadingSession, text_source: &mut TextSource) ->
     Ok(())
 }
 
-fn draw(session: &mut ReadingSession, text_source: &mut TextSource) -> Result<Page> {
+fn draw(
+    session: &mut ReadingSession, 
+    text_source: &mut TextSource,
+    current_page_index: usize,
+    page_count: usize,
+) -> Result<Page> {
     let mut stdout = io::stdout();
 
     execute!(
@@ -111,7 +131,9 @@ fn draw(session: &mut ReadingSession, text_source: &mut TextSource) -> Result<Pa
 
     write!(
         stdout,
-        "[offset {}/{} {:.2}%] n: next | p: previous | q: quit",
+        "[page {}/{} offset {}/{} {:.2}%] n: next | p: previous | q: quit",
+        current_page_index + 1,
+        page_count,
         session.metadata.current_offset,
         file_len,
         progress

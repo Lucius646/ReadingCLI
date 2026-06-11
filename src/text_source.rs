@@ -1,9 +1,12 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 use anyhow::Result;
+use encoding_rs::GBK;
+
+const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 
 pub struct TextSource {
     path: PathBuf,
@@ -15,7 +18,15 @@ pub struct TextSource {
 
 impl TextSource {
     pub fn new(path: PathBuf, block_size: usize, cache_radius: usize) -> Result<Self> {
-        let content = fs::read_to_string(&path)?;
+        let raw_bytes = fs::read(&path)?;
+        let decoded = decode_text(&raw_bytes);
+        let path = if decoded.needs_utf8_cache {
+            write_utf8_cache(&decoded.content)?
+        } else {
+            path
+        };
+
+        let content = decoded.content;
 
         let mut block_offsets = vec![0];
 
@@ -149,4 +160,42 @@ impl TextSource {
     pub fn file_len(&self) -> u64 {
         self.block_offsets.last().copied().unwrap_or(0)
     }
+}
+
+struct DecodedText {
+    content: String,
+    needs_utf8_cache: bool,
+}
+
+fn decode_text(bytes: &[u8]) -> DecodedText {
+    if bytes.starts_with(UTF8_BOM) {
+        let content = String::from_utf8_lossy(&bytes[UTF8_BOM.len()..]).into_owned();
+        return DecodedText {
+            content,
+            needs_utf8_cache: true,
+        };
+    }
+
+    match String::from_utf8(bytes.to_vec()) {
+        Ok(content) => DecodedText {
+            content,
+            needs_utf8_cache: false,
+        },
+        Err(_) => {
+            let (content, _, _) = GBK.decode(bytes);
+            DecodedText {
+                content: content.into_owned(),
+                needs_utf8_cache: true,
+            }
+        }
+    }
+}
+
+fn write_utf8_cache(content: &str) -> Result<PathBuf> {
+    fs::create_dir_all(".reading")?;
+
+    let path = PathBuf::from(".reading/current-text.utf8.txt");
+    fs::write(&path, content)?;
+
+    Ok(path)
 }
