@@ -206,23 +206,9 @@ fn handle_cover_key(key_code: KeyCode, session: &mut ReadingSession, state: &mut
 
 fn draw_home_screen(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    session: &ReadingSession,
-    text_source: &TextSource,
     state: &TuiState,
 ) -> Result<()> {
-    let file_len = text_source.file_len();
-    let progress = if file_len == 0 {
-        0.0
-    } else {
-        session.metadata.current_offset as f64 / file_len as f64 * 100.0
-    };
-    let book_line = format!("Current: {}", session.metadata.book_path.display());
-    let progress_line = format!(
-        "Progress: offset {}/{} | {:.2}%",
-        session.metadata.current_offset, file_len, progress
-    );
-
-    terminal.draw(|frame| draw_home(frame, state, &book_line, &progress_line))?;
+    terminal.draw(|frame| draw_home(frame, state))?;
 
     Ok(())
 }
@@ -281,19 +267,15 @@ fn draw(
     state: &TuiState,
 ) -> Result<()> {
     match state.app_mode {
-        AppMode::Home => draw_home_screen(terminal, session, text_source, state),
+        AppMode::Home => draw_home_screen(terminal, state),
         AppMode::Reading => draw_reading_screen(terminal, session, text_source, state),
         AppMode::Cover => draw_cover_screen(terminal),
     }
 }
 
-fn draw_home(frame: &mut Frame, state: &TuiState, book_line: &str, progress_line: &str) {
+fn draw_home(frame: &mut Frame, state: &TuiState) {
     let items = ["Continue", "Open New Book", "Select", "Quit"];
     let mut text = String::from("ReadingCLI\n\n");
-    text.push_str(book_line);
-    text.push('\n');
-    text.push_str(progress_line);
-    text.push_str("\n\n");
 
     for (index, item) in items.iter().enumerate() {
         if index == state.selected_home_item {
