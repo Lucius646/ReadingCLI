@@ -20,66 +20,119 @@ use crate::text_source::TextSource;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AppMode {
+    Home,
     Reading,
     Cover,
 }
 
+const HOME_ITEM_COUNT: usize = 4;
+
+struct TuiState {
+    app_mode: AppMode,
+    columns: u16,
+    body_rows: u16,
+    page_index: PageIndex,
+    current_page_index: usize,
+    selected_home_item: usize,
+}
+
+impl TuiState {
+    fn new(text_source: &TextSource, current_offset: u64, columns: u16, rows: u16) -> Result<Self> {
+        let body_rows = rows.saturating_sub(2);
+        let page_index = PageIndex::build(text_source, columns, body_rows)?;
+        let current_page_index = page_index.find_page_by_offset(current_offset);
+
+        Ok(Self {
+            app_mode: AppMode::Home,
+            columns,
+            body_rows,
+            page_index,
+            current_page_index,
+            selected_home_item: 0,
+        })
+    }
+
+    fn resize_if_needed(
+        &mut self,
+        text_source: &TextSource,
+        current_offset: u64,
+        columns: u16,
+        rows: u16,
+    ) -> Result<Option<u64>> {
+        let body_rows = rows.saturating_sub(2);
+
+        if columns == self.columns && body_rows == self.body_rows {
+            return Ok(None);
+        }
+
+        // 终端尺寸变化后，页索引必须按新尺寸重建。
+        self.columns = columns;
+        self.body_rows = body_rows;
+        self.page_index = PageIndex::build(text_source, self.columns, self.body_rows)?;
+        self.current_page_index = self.page_index.find_page_by_offset(current_offset);
+
+        Ok(self.page_index.page_start(self.current_page_index))
+    }
+
+    fn next_page(&mut self, session: &mut ReadingSession) {
+        if self.current_page_index + 1 < self.page_index.page_count() {
+            self.current_page_index += 1;
+
+            if let Some(page_start) = self.page_index.page_start(self.current_page_index) {
+                session.metadata.current_offset = page_start;
+            }
+        }
+    }
+
+    fn previous_page(&mut self, session: &mut ReadingSession) {
+        if self.current_page_index > 0 {
+            self.current_page_index -= 1;
+
+            if let Some(page_start) = self.page_index.page_start(self.current_page_index) {
+                session.metadata.current_offset = page_start;
+            }
+        }
+    }
+}
+
 pub fn run_reader(session: &mut ReadingSession, text_source: &mut TextSource) -> Result<()> {
     let _terminal = TerminalGuard::enter()?;
-    let mut app_mode = AppMode::Reading;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let (mut columns, rows) = terminal::size()?;
-    let mut body_rows = rows.saturating_sub(2);
-    let mut page_index = PageIndex::build(text_source, columns, body_rows)?;
-    let mut current_page_index = page_index.find_page_by_offset(session.metadata.current_offset);
+    let (columns, rows) = terminal::size()?;
+    let mut state = TuiState::new(text_source, session.metadata.current_offset, columns, rows)?;
 
-    if let Some(page_start) = page_index.page_start(current_page_index) {
+    if let Some(page_start) = state.page_index.page_start(state.current_page_index) {
         session.metadata.current_offset = page_start;
     }
 
     loop {
         let (latest_columns, latest_rows) = terminal::size()?;
-        let latest_body_rows = latest_rows.saturating_sub(2);
-
-        if latest_columns != columns || latest_body_rows != body_rows {
-            columns = latest_columns;
-            body_rows = latest_body_rows;
-
-            page_index = PageIndex::build(text_source, columns, body_rows)?;
-            current_page_index = page_index.find_page_by_offset(session.metadata.current_offset);
-
-            if let Some(page_start) = page_index.page_start(current_page_index) {
-                session.metadata.current_offset = page_start;
-            }
+        if let Some(page_start) = state.resize_if_needed(
+            text_source,
+            session.metadata.current_offset,
+            latest_columns,
+            latest_rows,
+        )? {
+            session.metadata.current_offset = page_start;
         }
 
-        draw(
-            &mut terminal,
-            app_mode,
-            session,
-            text_source,
-            current_page_index,
-            page_index.page_count(),
-        )?;
+        draw(&mut terminal, session, text_source, &state)?;
 
         if let Event::Key(key_event) = event::read()? {
             if key_event.kind != KeyEventKind::Press {
                 continue;
             }
-            match app_mode {
+            match state.app_mode {
+                AppMode::Home => {
+                    handle_home_key(key_event.code, session, &mut state);
+                }
                 AppMode::Reading => {
-                    handle_reading_key(
-                        key_event.code,
-                        session,
-                        &page_index,
-                        &mut current_page_index,
-                        &mut app_mode,
-                    );
+                    handle_reading_key(key_event.code, session, &mut state);
                 }
                 AppMode::Cover => {
-                    handle_cover_key(key_event.code, &mut app_mode, session);
+                    handle_cover_key(key_event.code, session, &mut state);
                 }
             }
         }
@@ -91,60 +144,77 @@ pub fn run_reader(session: &mut ReadingSession, text_source: &mut TextSource) ->
     Ok(())
 }
 
-fn handle_reading_key(
-    key_code: KeyCode,
-    session: &mut ReadingSession,
-    page_index: &PageIndex,
-    current_page_index: &mut usize,
-    app_mode: &mut AppMode,
-) {
+fn handle_home_key(key_code: KeyCode, session: &mut ReadingSession, state: &mut TuiState) {
     match key_code {
-        KeyCode::Char('n') => {
-            if *current_page_index + 1 < page_index.page_count() {
-                *current_page_index += 1;
-
-                if let Some(page_start) = page_index.page_start(*current_page_index) {
-                    session.metadata.current_offset = page_start;
-                }
-            }
+        KeyCode::Up => {
+            state.selected_home_item =
+                (state.selected_home_item + HOME_ITEM_COUNT - 1) % HOME_ITEM_COUNT;
         }
-        KeyCode::Char('p') => {
-            if *current_page_index > 0 {
-                *current_page_index -= 1;
-
-                if let Some(page_start) = page_index.page_start(*current_page_index) {
-                    session.metadata.current_offset = page_start;
-                }
-            }
+        KeyCode::Down => {
+            state.selected_home_item = (state.selected_home_item + 1) % HOME_ITEM_COUNT;
         }
+        KeyCode::Enter => match state.selected_home_item {
+            0 => {
+                state.app_mode = AppMode::Reading;
+            }
+            1 => {}
+            2 => {}
+            3 => {
+                session.quit();
+            }
+            _ => {}
+        },
         KeyCode::Char('q') => {
             session.quit();
-        }
-        KeyCode::Char('c') => {
-            *app_mode = AppMode::Cover;
         }
         _ => {}
     }
 }
 
-fn handle_cover_key(key_code: KeyCode, app_mode: &mut AppMode, session: &mut ReadingSession) {
+fn handle_reading_key(key_code: KeyCode, session: &mut ReadingSession, state: &mut TuiState) {
+    match key_code {
+        KeyCode::Char('n') => {
+            state.next_page(session);
+        }
+        KeyCode::Char('p') => {
+            state.previous_page(session);
+        }
+        KeyCode::Char('q') => {
+            session.quit();
+        }
+        KeyCode::Char('c') => {
+            state.app_mode = AppMode::Cover;
+        }
+        _ => {}
+    }
+}
+
+fn handle_cover_key(key_code: KeyCode, session: &mut ReadingSession, state: &mut TuiState) {
     match key_code {
         KeyCode::Char('c') => {
-            *app_mode = AppMode::Reading;
+            state.app_mode = AppMode::Reading;
         }
         KeyCode::Char('q') => {
             session.quit();
         }
         _ => {}
     }
+}
+
+fn draw_home_screen(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    state: &TuiState,
+) -> Result<()> {
+    terminal.draw(|frame| draw_home(frame, state))?;
+
+    Ok(())
 }
 
 fn draw_reading_screen(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut ReadingSession,
     text_source: &mut TextSource,
-    current_page_index: usize,
-    page_count: usize,
+    state: &TuiState,
 ) -> Result<()> {
     let (columns, rows) = terminal::size()?;
     let body_rows = rows.saturating_sub(2); // Reserve 2 rows for title and status
@@ -167,8 +237,8 @@ fn draw_reading_screen(
 
     let status_line = format!(
         "[page {}/{} offset {}/{} {:.2}%] n: next | p: previous | q: quit | c: cover",
-        current_page_index + 1,
-        page_count,
+        state.current_page_index + 1,
+        state.page_index.page_count(),
         session.metadata.current_offset,
         file_len,
         progress
@@ -187,22 +257,34 @@ fn draw_cover_screen(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> R
 
 fn draw(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    app_mode: AppMode,
     session: &mut ReadingSession,
     text_source: &mut TextSource,
-    current_page_index: usize,
-    page_count: usize,
+    state: &TuiState,
 ) -> Result<()> {
-    match app_mode {
-        AppMode::Reading => draw_reading_screen(
-            terminal,
-            session,
-            text_source,
-            current_page_index,
-            page_count,
-        ),
+    match state.app_mode {
+        AppMode::Home => draw_home_screen(terminal, state),
+        AppMode::Reading => draw_reading_screen(terminal, session, text_source, state),
         AppMode::Cover => draw_cover_screen(terminal),
     }
+}
+
+fn draw_home(frame: &mut Frame, state: &TuiState) {
+    let items = ["Continue", "Open New Book", "Select", "Quit"];
+    let mut text = String::from("ReadingCLI\n\n");
+
+    for (index, item) in items.iter().enumerate() {
+        if index == state.selected_home_item {
+            text.push_str("> ");
+        } else {
+            text.push_str("  ");
+        }
+        text.push_str(item);
+        text.push('\n');
+    }
+
+    text.push_str("\nUp/Down: move | Enter: select | q: quit");
+    let paragraph = Paragraph::new(text);
+    frame.render_widget(paragraph, frame.area());
 }
 
 fn draw_reading(frame: &mut Frame, page: &Page, status_line: &str) {
