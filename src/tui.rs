@@ -182,6 +182,9 @@ fn handle_reading_key(key_code: KeyCode, session: &mut ReadingSession, state: &m
         KeyCode::Char('q') => {
             session.quit();
         }
+        KeyCode::Esc | KeyCode::Char('h') => {
+            state.app_mode = AppMode::Home;
+        }
         KeyCode::Char('c') => {
             state.app_mode = AppMode::Cover;
         }
@@ -203,9 +206,23 @@ fn handle_cover_key(key_code: KeyCode, session: &mut ReadingSession, state: &mut
 
 fn draw_home_screen(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    session: &ReadingSession,
+    text_source: &TextSource,
     state: &TuiState,
 ) -> Result<()> {
-    terminal.draw(|frame| draw_home(frame, state))?;
+    let file_len = text_source.file_len();
+    let progress = if file_len == 0 {
+        0.0
+    } else {
+        session.metadata.current_offset as f64 / file_len as f64 * 100.0
+    };
+    let book_line = format!("Current: {}", session.metadata.book_path.display());
+    let progress_line = format!(
+        "Progress: offset {}/{} | {:.2}%",
+        session.metadata.current_offset, file_len, progress
+    );
+
+    terminal.draw(|frame| draw_home(frame, state, &book_line, &progress_line))?;
 
     Ok(())
 }
@@ -217,7 +234,7 @@ fn draw_reading_screen(
     state: &TuiState,
 ) -> Result<()> {
     let (columns, rows) = terminal::size()?;
-    let body_rows = rows.saturating_sub(2); // Reserve 2 rows for title and status
+    let body_rows = rows.saturating_sub(2); // Reserve 2 rows for progress and shortcuts
 
     let candidate = text_source.read_from_offset(session.metadata.current_offset, 64 * 1024)?;
 
@@ -235,8 +252,8 @@ fn draw_reading_screen(
         session.metadata.current_offset as f64 / file_len as f64 * 100.0
     };
 
-    let status_line = format!(
-        "[page {}/{} offset {}/{} {:.2}%] n: next | p: previous | q: quit | c: cover",
+    let progress_line = format!(
+        "page {}/{} | offset {}/{} | {:.2}%",
         state.current_page_index + 1,
         state.page_index.page_count(),
         session.metadata.current_offset,
@@ -244,7 +261,9 @@ fn draw_reading_screen(
         progress
     );
 
-    terminal.draw(|frame| draw_reading(frame, &page, &status_line))?;
+    let shortcut_line = "n: next | p: previous | h/Esc: home | c: cover | q: quit";
+
+    terminal.draw(|frame| draw_reading(frame, &page, &progress_line, shortcut_line))?;
 
     Ok(())
 }
@@ -262,15 +281,19 @@ fn draw(
     state: &TuiState,
 ) -> Result<()> {
     match state.app_mode {
-        AppMode::Home => draw_home_screen(terminal, state),
+        AppMode::Home => draw_home_screen(terminal, session, text_source, state),
         AppMode::Reading => draw_reading_screen(terminal, session, text_source, state),
         AppMode::Cover => draw_cover_screen(terminal),
     }
 }
 
-fn draw_home(frame: &mut Frame, state: &TuiState) {
+fn draw_home(frame: &mut Frame, state: &TuiState, book_line: &str, progress_line: &str) {
     let items = ["Continue", "Open New Book", "Select", "Quit"];
     let mut text = String::from("ReadingCLI\n\n");
+    text.push_str(book_line);
+    text.push('\n');
+    text.push_str(progress_line);
+    text.push_str("\n\n");
 
     for (index, item) in items.iter().enumerate() {
         if index == state.selected_home_item {
@@ -287,17 +310,23 @@ fn draw_home(frame: &mut Frame, state: &TuiState) {
     frame.render_widget(paragraph, frame.area());
 }
 
-fn draw_reading(frame: &mut Frame, page: &Page, status_line: &str) {
+fn draw_reading(frame: &mut Frame, page: &Page, progress_line: &str, shortcut_line: &str) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
         .split(frame.area());
 
     let body = Paragraph::new(page.text.as_str());
-    let status = Paragraph::new(status_line);
+    let progress = Paragraph::new(progress_line);
+    let shortcuts = Paragraph::new(shortcut_line);
 
     frame.render_widget(body, chunks[0]);
-    frame.render_widget(status, chunks[1]);
+    frame.render_widget(progress, chunks[1]);
+    frame.render_widget(shortcuts, chunks[2]);
 }
 
 fn draw_cover(frame: &mut Frame) {

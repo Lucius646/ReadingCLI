@@ -6,7 +6,7 @@ use std::path::PathBuf;
 #[command(about = "终端小说阅读器")]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
