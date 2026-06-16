@@ -13,6 +13,7 @@ pub struct TextSource {
 }
 
 impl TextSource {
+    // 打开文本文件，并统一转换成后续可按 UTF-8 offset 读取的文本源。
     pub fn new(path: PathBuf) -> Result<Self> {
         let raw_bytes = fs::read(&path)?;
         let decoded = decode_text(&raw_bytes);
@@ -28,6 +29,7 @@ impl TextSource {
         Ok(Self { path, file_len })
     }
 
+    // 从指定 UTF-8 字节偏移读取一段合法字符串。
     pub fn read_from_offset(&self, offset: u64, max_bytes: usize) -> Result<String> {
         let file_len = self.file_len();
 
@@ -55,6 +57,7 @@ impl TextSource {
         Ok(text)
     }
 
+    // 从指定 offset 往前读取一段合法 UTF-8 字符串。
     pub fn read_before_offset(&self, offset: u64, max_bytes: usize) -> Result<(u64, String)> {
         let file_len = self.file_len();
         let end = offset.min(file_len);
@@ -87,6 +90,7 @@ impl TextSource {
         Ok((actual_start, text))
     }
 
+    // 返回当前 UTF-8 文本源的字节长度。
     pub fn file_len(&self) -> u64 {
         self.file_len
     }
@@ -97,6 +101,7 @@ struct DecodedText {
     needs_utf8_cache: bool,
 }
 
+// 将原始字节解码成 UTF-8 字符串，并标记是否需要写缓存文件。
 fn decode_text(bytes: &[u8]) -> DecodedText {
     if bytes.starts_with(UTF8_BOM) {
         let content = String::from_utf8_lossy(&bytes[UTF8_BOM.len()..]).into_owned();
@@ -121,6 +126,7 @@ fn decode_text(bytes: &[u8]) -> DecodedText {
     }
 }
 
+// 把非普通 UTF-8 文本写成 UTF-8 缓存文件，供 offset 读取使用。
 fn write_utf8_cache(content: &str) -> Result<PathBuf> {
     fs::create_dir_all(".reading")?;
 

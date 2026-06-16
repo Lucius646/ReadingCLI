@@ -7,6 +7,7 @@ pub struct ReadingSession {
 }
 
 impl ReadingSession {
+    // 根据书籍元数据创建一次运行中的阅读会话。
     pub fn new(metadata: BookMetadata) -> Self {
         Self {
             metadata,
@@ -14,6 +15,7 @@ impl ReadingSession {
         }
     }
 
+    // 标记会话退出，让 TUI 主循环结束。
     pub fn quit(&mut self) {
         self.running = false;
     }

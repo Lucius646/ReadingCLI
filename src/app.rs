@@ -4,84 +4,55 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::cli::{Cli, Command};
+use crate::library::{BookLibrary, current_timestamp, load_or_migrate_library, save_library};
 use crate::metadata::BookMetadata;
 use crate::session::ReadingSession;
 use crate::text_source::TextSource;
 use crate::tui;
 
 const DEFAULT_BOOK_PATH: &str = "default.txt";
+const LIBRARY_PATH: &str = ".reading/library.json";
+const LEGACY_METADATA_PATH: &str = ".reading/current-book.json";
 
+// 应用主流程：读取书架状态，打开当前书，进入 TUI，退出后保存书架。
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
+    let mut library = load_or_migrate_library(
+        &PathBuf::from(LIBRARY_PATH),
+        &PathBuf::from(LEGACY_METADATA_PATH),
+        PathBuf::from(DEFAULT_BOOK_PATH),
+    )?;
 
-    match cli.command {
-        Some(Command::Open { path }) => {
-            let (mut session, mut text_source) = open_book(path)?;
+    let metadata = match cli.command {
+        Some(Command::Open { path }) => open_book_metadata(path, &mut library),
+        None => Ok(library
+            .current_book()
+            .unwrap_or_else(|| BookMetadata::new(PathBuf::from(DEFAULT_BOOK_PATH)))),
+    }?;
 
-            tui::run_reader(&mut session, &mut text_source)?;
+    let mut session = ReadingSession::new(metadata);
+    let mut text_source = TextSource::new(session.metadata.book_path.clone())?;
+    session.metadata.file_len = text_source.file_len();
 
-            save_metadata(&session.metadata)?;
-            println!("see u again!");
-        }
-        None => {
-            let metadata = load_existing_metadata()?
-                .unwrap_or_else(|| BookMetadata::new(PathBuf::from(DEFAULT_BOOK_PATH)));
+    tui::run_reader(&mut session, &mut text_source, &mut library)?;
 
-            let mut session = ReadingSession::new(metadata);
-            let mut text_source = TextSource::new(session.metadata.book_path.clone())?;
+    library.current_book_path = session.metadata.book_path.clone();
+    library.upsert_book(session.metadata.clone());
+    save_library(&PathBuf::from(LIBRARY_PATH), &library)?;
 
-            tui::run_reader(&mut session, &mut text_source)?;
-
-            save_metadata(&session.metadata)?;
-            println!("see u again!");
-        }
-    }
-
-    Ok(())
-}
-
-fn open_book(path: PathBuf) -> Result<(ReadingSession, TextSource)> {
-    let metadata = load_or_create_metadata(path)?;
-    let session = ReadingSession::new(metadata);
-    let text_source = TextSource::new(session.metadata.book_path.clone())?;
-
-    Ok((session, text_source))
-}
-
-fn load_existing_metadata() -> Result<Option<BookMetadata>> {
-    let metadata_path = ".reading/current-book.json";
-
-    if !fs::exists(metadata_path)? {
-        return Ok(None);
-    }
-
-    let json = fs::read_to_string(metadata_path)?;
-    let metadata = serde_json::from_str(&json)?;
-
-    Ok(Some(metadata))
-}
-
-fn save_metadata(metadata: &BookMetadata) -> Result<()> {
-    fs::create_dir_all(".reading")?;
-
-    let json = serde_json::to_string_pretty(metadata)?;
-    fs::write(".reading/current-book.json", json)?;
+    println!("see u again!");
 
     Ok(())
 }
 
-fn load_or_create_metadata(path: PathBuf) -> Result<BookMetadata> {
+// 通过命令行路径激活一本书，并复用书架里已有的阅读进度。
+fn open_book_metadata(path: PathBuf, library: &mut BookLibrary) -> Result<BookMetadata> {
     let book_path = normalize_book_path(path);
 
-    if let Some(metadata) = load_existing_metadata()? {
-        if normalize_book_path(metadata.book_path.clone()) == book_path {
-            return Ok(metadata);
-        }
-    }
-
-    Ok(BookMetadata::new(book_path))
+    Ok(library.activate_book(book_path, current_timestamp()))
 }
 
+// 尽量把路径标准化为绝对路径；失败时保留原路径。
 fn normalize_book_path(path: PathBuf) -> PathBuf {
     fs::canonicalize(&path).unwrap_or(path)
 }

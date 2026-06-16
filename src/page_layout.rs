@@ -6,6 +6,7 @@ pub struct Page {
     pub end_offset: u64,
 }
 
+// 按终端宽高把候选文本排成一页，并返回下一页起始 offset。
 pub fn layout_page(text: &str, start_offset: u64, columns: u16, rows: u16) -> Page {
     let max_columns = columns as usize;
     let max_rows = rows as usize;
@@ -51,6 +52,7 @@ pub fn layout_page(text: &str, start_offset: u64, columns: u16, rows: u16) -> Pa
     }
 }
 
+// 计算字符在终端中占用的列宽。
 fn char_display_width(ch: char) -> usize {
     ch.width().unwrap_or(0)
 }

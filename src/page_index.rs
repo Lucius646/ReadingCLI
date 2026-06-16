@@ -10,6 +10,7 @@ pub struct PageIndex {
 }
 
 impl PageIndex {
+    // 按当前终端尺寸从头扫描文本，建立每一页的起始 offset。
     pub fn build(text_source: &TextSource, columns: u16, rows: u16) -> Result<Self> {
         let mut page_starts = Vec::new();
         let mut current_offset = 0;
@@ -36,10 +37,12 @@ impl PageIndex {
         })
     }
 
+    // 返回当前页索引里的总页数。
     pub fn page_count(&self) -> usize {
         self.page_starts.len()
     }
 
+    // 根据持久化 offset 找到它在当前终端尺寸下属于哪一页。
     pub fn find_page_by_offset(&self, offset: u64) -> usize {
         let mut page_index = 0;
         for (index, page_start) in self.page_starts.iter().enumerate() {
@@ -52,6 +55,7 @@ impl PageIndex {
         page_index
     }
 
+    // 返回指定页的起始 offset；页号越界时返回 None。
     pub fn page_start(&self, page_index: usize) -> Option<u64> {
         self.page_starts.get(page_index).copied()
     }
