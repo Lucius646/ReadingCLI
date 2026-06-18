@@ -19,3 +19,9 @@
 
 ## Coding 约束
 - 用户是coding的主体，非明确要求不得自主修改项目代码
+
+## Cover Mode 约束
+- Cover Mode 的设计优先参考 `genact`（https://github.com/svenstaro/genact）的模块化伪活动思路；若复制代码或数据，必须记录许可证与来源。
+
+## Terminal 约束
+- 优先使用 bash 作为终端验证的工具，非必要不适用 powershell

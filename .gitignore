@@ -2,6 +2,7 @@
 /.reading/
 /.superpowers/
 /novel.txt
+/docs/code-walkthrough.pdf
 
 *.tmp
 *.log

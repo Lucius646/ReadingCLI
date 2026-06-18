@@ -1,11 +1,14 @@
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::{
     cursor,
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseEventKind,
+    },
     execute, terminal,
 };
 use ratatui::{
@@ -19,6 +22,7 @@ use ratatui::{
 use time::{Month, OffsetDateTime};
 use tui_input::{Input, backend::crossterm::EventHandler};
 
+use crate::cover::{CoverContext, CoverEngine, default_registry};
 use crate::library::{BookLibrary, current_timestamp};
 use crate::page_index::PageIndex;
 use crate::page_layout::{Page, layout_page};
@@ -125,6 +129,7 @@ pub fn run_reader(
 
     let (columns, rows) = terminal::size()?;
     let mut state = TuiState::new(text_source, session.metadata.current_offset, columns, rows)?;
+    let mut cover_engine: Option<CoverEngine> = None;
 
     if let Some(page_start) = state.page_index.page_start(state.current_page_index) {
         session.metadata.current_offset = page_start;
@@ -141,28 +146,89 @@ pub fn run_reader(
             session.metadata.current_offset = page_start;
         }
 
-        draw(&mut terminal, session, text_source, library, &state)?;
+        if state.app_mode == AppMode::Cover
+            && let Some(engine) = cover_engine.as_mut()
+        {
+            let context = CoverContext {
+                output_width: latest_columns as usize,
+            };
+            engine.tick(Instant::now(), &context);
+        }
 
-        if let Event::Key(key_event) = event::read()? {
-            if key_event.kind != KeyEventKind::Press {
-                continue;
+        draw(
+            &mut terminal,
+            session,
+            text_source,
+            library,
+            &state,
+            cover_engine.as_ref(),
+        )?;
+
+        let next_event = if state.app_mode == AppMode::Cover {
+            if event::poll(Duration::from_millis(50))? {
+                Some(event::read()?)
+            } else {
+                None
             }
-            match state.app_mode {
-                AppMode::Home => {
-                    handle_home_key(key_event.code, session, &mut state);
+        } else {
+            Some(event::read()?)
+        };
+
+        if let Some(next_event) = next_event {
+            match next_event {
+                Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
+                    match state.app_mode {
+                        AppMode::Home => {
+                            handle_home_key(key_event.code, session, &mut state);
+                        }
+                        AppMode::Reading => {
+                            handle_reading_key(
+                                key_event.code,
+                                session,
+                                &mut state,
+                                &mut cover_engine,
+                            );
+                        }
+                        AppMode::Cover => {
+                            handle_cover_key(
+                                key_event.code,
+                                &mut state,
+                                &mut cover_engine,
+                                latest_columns as usize,
+                                latest_rows as usize,
+                            );
+                        }
+                        AppMode::OpenInput => {
+                            handle_open_input_key(
+                                key_event,
+                                session,
+                                text_source,
+                                library,
+                                &mut state,
+                            )?;
+                        }
+                        AppMode::Select => {
+                            handle_select_key(
+                                key_event.code,
+                                session,
+                                text_source,
+                                library,
+                                &mut state,
+                            )?;
+                        }
+                    }
                 }
-                AppMode::Reading => {
-                    handle_reading_key(key_event.code, session, &mut state);
+                Event::Mouse(mouse_event) if state.app_mode == AppMode::Cover => {
+                    if let Some(engine) = cover_engine.as_mut() {
+                        handle_cover_mouse(
+                            mouse_event.kind,
+                            engine,
+                            latest_columns as usize,
+                            latest_rows as usize,
+                        );
+                    }
                 }
-                AppMode::Cover => {
-                    handle_cover_key(key_event.code, session, &mut state);
-                }
-                AppMode::OpenInput => {
-                    handle_open_input_key(key_event, session, text_source, library, &mut state)?;
-                }
-                AppMode::Select => {
-                    handle_select_key(key_event.code, session, text_source, library, &mut state)?;
-                }
+                _ => {}
             }
         }
 
@@ -297,7 +363,12 @@ fn handle_open_input_key(
 }
 
 // 处理阅读页的翻页、回首页、Cover Mode 和退出。
-fn handle_reading_key(key_code: KeyCode, session: &mut ReadingSession, state: &mut TuiState) {
+fn handle_reading_key(
+    key_code: KeyCode,
+    session: &mut ReadingSession,
+    state: &mut TuiState,
+    cover_engine: &mut Option<CoverEngine>,
+) {
     match key_code {
         KeyCode::Char('n') => {
             state.next_page(session);
@@ -312,6 +383,7 @@ fn handle_reading_key(key_code: KeyCode, session: &mut ReadingSession, state: &m
             state.app_mode = AppMode::Home;
         }
         KeyCode::Char('c') => {
+            *cover_engine = Some(CoverEngine::new(default_registry(), 10_000, Instant::now()));
             state.app_mode = AppMode::Cover;
         }
         _ => {}
@@ -319,13 +391,64 @@ fn handle_reading_key(key_code: KeyCode, session: &mut ReadingSession, state: &m
 }
 
 // 处理 Cover Mode 的返回和退出。
-fn handle_cover_key(key_code: KeyCode, session: &mut ReadingSession, state: &mut TuiState) {
+fn handle_cover_key(
+    key_code: KeyCode,
+    state: &mut TuiState,
+    cover_engine: &mut Option<CoverEngine>,
+    body_width: usize,
+    body_height: usize,
+) {
+    if key_code == KeyCode::Char('c') {
+        *cover_engine = None;
+        state.app_mode = AppMode::Reading;
+        return;
+    }
+
+    let Some(engine) = cover_engine.as_mut() else {
+        state.app_mode = AppMode::Reading;
+        return;
+    };
+
     match key_code {
-        KeyCode::Char('c') => {
-            state.app_mode = AppMode::Reading;
+        KeyCode::Up => {
+            engine.terminal_mut().scroll_up(1, body_width, body_height);
         }
-        KeyCode::Char('q') => {
-            session.quit();
+        KeyCode::Down => {
+            engine
+                .terminal_mut()
+                .scroll_down(1, body_width, body_height);
+        }
+        KeyCode::PageUp => {
+            engine
+                .terminal_mut()
+                .scroll_up(body_height, body_width, body_height);
+        }
+        KeyCode::PageDown => {
+            engine
+                .terminal_mut()
+                .scroll_down(body_height, body_width, body_height);
+        }
+        KeyCode::End => {
+            engine.terminal_mut().scroll_to_bottom();
+        }
+        _ => {}
+    }
+}
+
+fn handle_cover_mouse(
+    mouse_kind: MouseEventKind,
+    engine: &mut CoverEngine,
+    body_width: usize,
+    body_height: usize,
+) {
+    match mouse_kind {
+        MouseEventKind::ScrollUp => {
+            engine.terminal_mut().scroll_up(3, body_width, body_height);
+        }
+        MouseEventKind::ScrollDown => {
+            engine
+                .terminal_mut()
+                .scroll_down(3, body_width, body_height);
         }
         _ => {}
     }
@@ -410,8 +533,11 @@ fn draw_reading_screen(
 }
 
 // 绘制 Cover Mode 页面。
-fn draw_cover_screen(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
-    terminal.draw(|frame| draw_cover(frame))?;
+fn draw_cover_screen(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    engine: &CoverEngine,
+) -> Result<()> {
+    terminal.draw(|frame| draw_cover(frame, engine))?;
 
     Ok(())
 }
@@ -444,11 +570,15 @@ fn draw(
     text_source: &mut TextSource,
     library: &BookLibrary,
     state: &TuiState,
+    cover_engine: Option<&CoverEngine>,
 ) -> Result<()> {
     match state.app_mode {
         AppMode::Home => draw_home_screen(terminal, state),
         AppMode::Reading => draw_reading_screen(terminal, session, text_source, state),
-        AppMode::Cover => draw_cover_screen(terminal),
+        AppMode::Cover => draw_cover_screen(
+            terminal,
+            cover_engine.expect("Cover mode requires an active CoverEngine"),
+        ),
         AppMode::OpenInput => draw_open_input_screen(terminal, state),
         AppMode::Select => draw_select_screen(terminal, library, state),
     }
@@ -564,7 +694,7 @@ fn render_input_line(input: &Input) -> Line<'static> {
 }
 
 // 从路径中提取展示用书名。
-fn book_title(path: &PathBuf) -> String {
+fn book_title(path: &Path) -> String {
     path.file_stem()
         .and_then(|name| name.to_str())
         .map(ToOwned::to_owned)
@@ -639,11 +769,17 @@ fn draw_reading(frame: &mut Frame, page: &Page, progress_line: &str, shortcut_li
 }
 
 // 在 ratatui frame 上渲染伪装输出。
-fn draw_cover(frame: &mut Frame) {
-    let text = Paragraph::new(
-        "Compiling reading_cli v0.1.0\nFinished dev profile\n\npress c to return | q to quit",
-    );
-    frame.render_widget(text, frame.area());
+fn draw_cover(frame: &mut Frame, engine: &CoverEngine) {
+    let area = frame.area();
+    let lines = engine
+        .terminal()
+        .visible_rows(area.width as usize, area.height as usize)
+        .into_iter()
+        .map(Line::from)
+        .collect::<Vec<_>>();
+    let output = Paragraph::new(lines);
+
+    frame.render_widget(output, area);
 }
 
 struct TerminalGuard;
@@ -652,7 +788,12 @@ impl TerminalGuard {
     // 进入 raw mode、alternate screen，并隐藏光标。
     fn enter() -> Result<Self> {
         terminal::enable_raw_mode()?;
-        execute!(io::stdout(), terminal::EnterAlternateScreen, cursor::Hide)?;
+        execute!(
+            io::stdout(),
+            terminal::EnterAlternateScreen,
+            cursor::Hide,
+            EnableMouseCapture
+        )?;
 
         Ok(Self)
     }
@@ -661,7 +802,12 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     // 离开 TUI 时尽量恢复终端状态。
     fn drop(&mut self) {
-        let _ = execute!(io::stdout(), cursor::Show, terminal::LeaveAlternateScreen);
+        let _ = execute!(
+            io::stdout(),
+            DisableMouseCapture,
+            cursor::Show,
+            terminal::LeaveAlternateScreen
+        );
         let _ = terminal::disable_raw_mode();
     }
 }

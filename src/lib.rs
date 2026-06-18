@@ -1,5 +1,6 @@
 pub mod app;
 pub mod cli;
+pub mod cover;
 pub mod library;
 pub mod metadata;
 pub mod page_index;
