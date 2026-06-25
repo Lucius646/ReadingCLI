@@ -94,6 +94,61 @@ fn activate_book_adds_new_book() {
 }
 
 #[test]
+fn activate_book_reuses_existing_book_when_path_forms_differ() -> Result<()> {
+    let temp_dir = tempdir()?;
+    let direct_path = temp_dir.path().join("novel.txt");
+    let dotted_path = temp_dir.path().join(".").join("novel.txt");
+    std::fs::write(&direct_path, "content")?;
+
+    let default_path = PathBuf::from("default.txt");
+    let mut library = BookLibrary::new(default_path);
+    let mut book = BookMetadata::new(dotted_path);
+    book.current_offset = 256;
+    book.last_opened_at = 1;
+    library.upsert_book(book);
+
+    let activated_book = library.activate_book(direct_path, 2);
+
+    assert_eq!(activated_book.current_offset, 256);
+    assert_eq!(activated_book.last_opened_at, 2);
+    assert_eq!(library.books.len(), 2);
+
+    Ok(())
+}
+
+#[test]
+fn loading_library_deduplicates_existing_path_variants() -> Result<()> {
+    let temp_dir = tempdir()?;
+    let direct_path = temp_dir.path().join("novel.txt");
+    let dotted_path = temp_dir.path().join(".").join("novel.txt");
+    std::fs::write(&direct_path, "content")?;
+
+    let library_path = temp_dir.path().join(".reading").join("library.json");
+    let mut dotted_book = BookMetadata::new(dotted_path);
+    dotted_book.current_offset = 128;
+    dotted_book.last_opened_at = 1;
+    let mut direct_book = BookMetadata::new(direct_path.clone());
+    direct_book.current_offset = 256;
+    direct_book.last_opened_at = 2;
+    let library = BookLibrary {
+        current_book_path: direct_path,
+        books: vec![
+            BookMetadata::new(PathBuf::from("default.txt")),
+            dotted_book,
+            direct_book,
+        ],
+    };
+
+    save_library(&library_path, &library)?;
+    let loaded_library = load_library(&library_path)?.unwrap();
+
+    assert_eq!(loaded_library.books.len(), 2);
+    assert_eq!(loaded_library.current_book().unwrap().current_offset, 256);
+
+    Ok(())
+}
+
+#[test]
 fn library_can_be_saved_and_loaded() -> Result<()> {
     let temp_dir = tempdir()?;
     let library_path = temp_dir.path().join(".reading").join("library.json");

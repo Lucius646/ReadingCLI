@@ -14,6 +14,7 @@ chrono = { version = "0.4", features = ["clock"], default-features = false }
 fake = { version = "5", features = ["chrono"] }
 humansize = "2"
 humantime = "2"
+jieba-rs = "0.10"
 unicode-width = "0.2"
 ratatui = "0.29"
 rand = "0.10"

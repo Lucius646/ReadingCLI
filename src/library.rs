@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -26,18 +26,22 @@ impl BookLibrary {
 
     // 返回当前书的元数据。
     pub fn current_book(&self) -> Option<BookMetadata> {
+        let current_book_key = book_path_key(&self.current_book_path);
+
         self.books
             .iter()
-            .find(|book| book.book_path == self.current_book_path)
+            .find(|book| book_path_key(&book.book_path) == current_book_key)
             .cloned()
     }
 
-    // 插入新书，或用同路径的新元数据覆盖旧记录。
+    // 插入新书，或用同一路径身份的新元数据覆盖旧记录。
     pub fn upsert_book(&mut self, book: BookMetadata) {
+        let book_key = book_path_key(&book.book_path);
+
         if let Some(existing_book) = self
             .books
             .iter_mut()
-            .find(|existing_book| existing_book.book_path == book.book_path)
+            .find(|existing_book| book_path_key(&existing_book.book_path) == book_key)
         {
             *existing_book = book;
             return;
@@ -48,10 +52,11 @@ impl BookLibrary {
 
     // 激活一本书：已有记录则复用进度，新书则创建默认元数据。
     pub fn activate_book(&mut self, book_path: PathBuf, opened_at: u64) -> BookMetadata {
+        let book_key = book_path_key(&book_path);
         let mut book = self
             .books
             .iter()
-            .find(|book| book.book_path == book_path)
+            .find(|book| book_path_key(&book.book_path) == book_key)
             .cloned()
             .unwrap_or_else(|| BookMetadata::new(book_path.clone()));
 
@@ -74,6 +79,26 @@ impl BookLibrary {
         books.sort_by(|left, right| right.last_opened_at.cmp(&left.last_opened_at));
         books
     }
+
+    // 合并历史书架里的重复路径记录，例如同一本书的相对路径和绝对路径。
+    pub fn deduplicate_books(&mut self) {
+        let mut merged_books: Vec<BookMetadata> = Vec::new();
+
+        for book in self.books.drain(..) {
+            let book_key = book_path_key(&book.book_path);
+
+            if let Some(existing_book) = merged_books
+                .iter_mut()
+                .find(|existing_book| book_path_key(&existing_book.book_path) == book_key)
+            {
+                merge_book_metadata(existing_book, book);
+            } else {
+                merged_books.push(book);
+            }
+        }
+
+        self.books = merged_books;
+    }
 }
 
 // 从 library.json 读取书架；文件不存在时返回 None。
@@ -83,7 +108,8 @@ pub fn load_library(path: &PathBuf) -> Result<Option<BookLibrary>> {
     }
 
     let json = fs::read_to_string(path)?;
-    let library = serde_json::from_str(&json)?;
+    let mut library: BookLibrary = serde_json::from_str(&json)?;
+    library.deduplicate_books();
 
     Ok(Some(library))
 }
@@ -130,4 +156,30 @@ pub fn current_timestamp() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0)
+}
+
+fn book_path_key(path: &Path) -> String {
+    let normalized_path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let key = normalized_path.to_string_lossy().replace('\\', "/");
+
+    if cfg!(windows) {
+        key.to_lowercase()
+    } else {
+        key
+    }
+}
+
+fn merge_book_metadata(existing_book: &mut BookMetadata, incoming_book: BookMetadata) {
+    if incoming_book.last_opened_at >= existing_book.last_opened_at {
+        *existing_book = incoming_book;
+        return;
+    }
+
+    if existing_book.current_offset == 0 && incoming_book.current_offset != 0 {
+        existing_book.current_offset = incoming_book.current_offset;
+    }
+
+    if existing_book.file_len == 0 && incoming_book.file_len != 0 {
+        existing_book.file_len = incoming_book.file_len;
+    }
 }

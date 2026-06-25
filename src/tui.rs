@@ -23,9 +23,11 @@ use time::{Month, OffsetDateTime};
 use tui_input::{Input, backend::crossterm::EventHandler};
 
 use crate::cover::{CoverContext, CoverEngine, default_registry};
+use crate::highlight::render::render_highlighted_page;
+use crate::highlight::store::{AnnotationCache, annotation_path_for_book};
 use crate::library::{BookLibrary, current_timestamp};
 use crate::page_index::PageIndex;
-use crate::page_layout::{Page, layout_page};
+use crate::page_layout::layout_page;
 use crate::session::ReadingSession;
 use crate::text_source::TextSource;
 
@@ -39,6 +41,7 @@ enum AppMode {
 }
 
 const HOME_ITEM_COUNT: usize = 4;
+const ANNOTATION_CHUNK_SIZE: usize = 64 * 1024;
 
 struct TuiState {
     app_mode: AppMode,
@@ -130,6 +133,8 @@ pub fn run_reader(
     let (columns, rows) = terminal::size()?;
     let mut state = TuiState::new(text_source, session.metadata.current_offset, columns, rows)?;
     let mut cover_engine: Option<CoverEngine> = None;
+    let mut annotation_cache =
+        load_or_build_annotation_cache(&session.metadata.book_path, text_source)?;
 
     if let Some(page_start) = state.page_index.page_start(state.current_page_index) {
         session.metadata.current_offset = page_start;
@@ -161,6 +166,7 @@ pub fn run_reader(
             text_source,
             library,
             &state,
+            &mut annotation_cache,
             cover_engine.as_ref(),
         )?;
 
@@ -204,6 +210,7 @@ pub fn run_reader(
                                 session,
                                 text_source,
                                 library,
+                                &mut annotation_cache,
                                 &mut state,
                             )?;
                         }
@@ -213,6 +220,7 @@ pub fn run_reader(
                                 session,
                                 text_source,
                                 library,
+                                &mut annotation_cache,
                                 &mut state,
                             )?;
                         }
@@ -280,6 +288,7 @@ fn handle_select_key(
     session: &mut ReadingSession,
     text_source: &mut TextSource,
     library: &mut BookLibrary,
+    annotation_cache: &mut AnnotationCache,
     state: &mut TuiState,
 ) -> Result<()> {
     let default_book_path = PathBuf::from("default.txt");
@@ -302,7 +311,14 @@ fn handle_select_key(
         }
         KeyCode::Enter => {
             if let Some(book) = books.get(state.selected_book_index) {
-                switch_book(session, text_source, library, state, book.book_path.clone())?;
+                switch_book(
+                    session,
+                    text_source,
+                    library,
+                    annotation_cache,
+                    state,
+                    book.book_path.clone(),
+                )?;
             }
         }
         KeyCode::Char('q') => {
@@ -320,6 +336,7 @@ fn handle_open_input_key(
     session: &mut ReadingSession,
     text_source: &mut TextSource,
     library: &mut BookLibrary,
+    annotation_cache: &mut AnnotationCache,
     state: &mut TuiState,
 ) -> Result<()> {
     match key_event.code {
@@ -351,7 +368,7 @@ fn handle_open_input_key(
                 return Ok(());
             }
 
-            switch_book(session, text_source, library, state, path)?;
+            switch_book(session, text_source, library, annotation_cache, state, path)?;
         }
         _ => {
             state.open_input.handle_event(&Event::Key(key_event));
@@ -459,6 +476,7 @@ fn switch_book(
     session: &mut ReadingSession,
     text_source: &mut TextSource,
     library: &mut BookLibrary,
+    annotation_cache: &mut AnnotationCache,
     state: &mut TuiState,
     path: PathBuf,
 ) -> Result<()> {
@@ -468,6 +486,7 @@ fn switch_book(
     session.metadata = metadata;
     *text_source = TextSource::new(session.metadata.book_path.clone())?;
     session.metadata.file_len = text_source.file_len();
+    *annotation_cache = load_or_build_annotation_cache(&session.metadata.book_path, text_source)?;
 
     state.page_index = PageIndex::build(text_source, state.columns, state.body_rows)?;
     state.current_page_index = state
@@ -496,6 +515,7 @@ fn draw_reading_screen(
     session: &mut ReadingSession,
     text_source: &mut TextSource,
     state: &TuiState,
+    annotation_cache: &mut AnnotationCache,
 ) -> Result<()> {
     let (columns, rows) = terminal::size()?;
     let body_rows = rows.saturating_sub(2);
@@ -507,6 +527,14 @@ fn draw_reading_screen(
         session.metadata.current_offset,
         columns,
         body_rows,
+    );
+    let annotations = annotation_cache.query(session.metadata.current_offset, page.end_offset)?;
+    let highlighted_page = render_highlighted_page(
+        &candidate,
+        session.metadata.current_offset,
+        columns,
+        body_rows,
+        &annotations,
     );
 
     let file_len = text_source.file_len();
@@ -527,7 +555,8 @@ fn draw_reading_screen(
 
     let shortcut_line = "n: next | p: previous | h/Esc: home | c: cover | q: quit";
 
-    terminal.draw(|frame| draw_reading(frame, &page, &progress_line, shortcut_line))?;
+    terminal
+        .draw(|frame| draw_reading(frame, highlighted_page.lines, &progress_line, shortcut_line))?;
 
     Ok(())
 }
@@ -570,11 +599,14 @@ fn draw(
     text_source: &mut TextSource,
     library: &BookLibrary,
     state: &TuiState,
+    annotation_cache: &mut AnnotationCache,
     cover_engine: Option<&CoverEngine>,
 ) -> Result<()> {
     match state.app_mode {
         AppMode::Home => draw_home_screen(terminal, state),
-        AppMode::Reading => draw_reading_screen(terminal, session, text_source, state),
+        AppMode::Reading => {
+            draw_reading_screen(terminal, session, text_source, state, annotation_cache)
+        }
         AppMode::Cover => draw_cover_screen(
             terminal,
             cover_engine.expect("Cover mode requires an active CoverEngine"),
@@ -749,7 +781,12 @@ fn month_number(month: Month) -> u8 {
 }
 
 // 在 ratatui frame 上渲染阅读正文和底部两行状态。
-fn draw_reading(frame: &mut Frame, page: &Page, progress_line: &str, shortcut_line: &str) {
+fn draw_reading(
+    frame: &mut Frame,
+    body_lines: Vec<Line<'static>>,
+    progress_line: &str,
+    shortcut_line: &str,
+) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -759,13 +796,21 @@ fn draw_reading(frame: &mut Frame, page: &Page, progress_line: &str, shortcut_li
         ])
         .split(frame.area());
 
-    let body = Paragraph::new(page.text.as_str());
+    let body = Paragraph::new(body_lines);
     let progress = Paragraph::new(progress_line);
     let shortcuts = Paragraph::new(shortcut_line);
 
     frame.render_widget(body, chunks[0]);
     frame.render_widget(progress, chunks[1]);
     frame.render_widget(shortcuts, chunks[2]);
+}
+
+fn load_or_build_annotation_cache(
+    book_path: &Path,
+    text_source: &TextSource,
+) -> Result<AnnotationCache> {
+    let annotation_path = annotation_path_for_book(book_path);
+    AnnotationCache::load_or_build(&annotation_path, text_source, ANNOTATION_CHUNK_SIZE)
 }
 
 // 在 ratatui frame 上渲染伪装输出。

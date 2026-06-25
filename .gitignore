@@ -1,4 +1,5 @@
 /target/
+/.target-highlight-test/
 /.reading/
 /.superpowers/
 /novel.txt
