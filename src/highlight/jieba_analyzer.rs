@@ -1,5 +1,7 @@
+use anyhow::Result;
 use jieba_rs::Jieba;
 
+use crate::highlight::analyzer::TextAnalyzer;
 use crate::highlight::annotation::{Annotation, AnnotationKind};
 
 pub struct JiebaAnalyzer {
@@ -13,10 +15,17 @@ impl JiebaAnalyzer {
             jieba: Jieba::new(),
         }
     }
+}
+
+impl TextAnalyzer for JiebaAnalyzer {
+    fn analyzer_id(&self) -> &'static str {
+        "jieba"
+    }
 
     // Convert jieba POS tags into byte-offset annotations for later rendering.
-    pub fn analyze(&self, text: &str, base_offset: u64) -> Vec<Annotation> {
-        self.jieba
+    fn analyze(&self, text: &str, base_offset: u64) -> Result<Vec<Annotation>> {
+        let annotations = self
+            .jieba
             .tag(text, true)
             .into_iter()
             .filter_map(|tag| {
@@ -32,7 +41,9 @@ impl JiebaAnalyzer {
                     kind,
                 })
             })
-            .collect()
+            .collect();
+
+        Ok(annotations)
     }
 }
 

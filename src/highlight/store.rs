@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::highlight::analyzer::TextAnalyzer;
 use crate::highlight::annotation::Annotation;
-use crate::highlight::jieba_analyzer::JiebaAnalyzer;
 use crate::text_source::TextSource;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -41,6 +41,7 @@ impl AnnotationCache {
         root_path: &Path,
         text_source: &TextSource,
         chunk_size: usize,
+        analyzer: &dyn TextAnalyzer,
     ) -> Result<Self> {
         let source_file_len = text_source.file_len();
 
@@ -48,7 +49,7 @@ impl AnnotationCache {
             return Ok(cache);
         }
 
-        Self::build(root_path, text_source, chunk_size)
+        Self::build(root_path, text_source, chunk_size, analyzer)
     }
 
     pub fn query(&mut self, start_offset: u64, end_offset: u64) -> Result<Vec<Annotation>> {
@@ -109,13 +110,17 @@ impl AnnotationCache {
         }))
     }
 
-    fn build(root_path: &Path, text_source: &TextSource, chunk_size: usize) -> Result<Self> {
+    fn build(
+        root_path: &Path,
+        text_source: &TextSource,
+        chunk_size: usize,
+        analyzer: &dyn TextAnalyzer,
+    ) -> Result<Self> {
         if root_path.exists() {
             fs::remove_dir_all(root_path)?;
         }
         fs::create_dir_all(root_path)?;
 
-        let analyzer = JiebaAnalyzer::new();
         let source_file_len = text_source.file_len();
         let mut chunks = Vec::new();
         let mut current_offset = 0u64;
@@ -129,7 +134,7 @@ impl AnnotationCache {
             }
 
             let end_offset = current_offset + text.len() as u64;
-            let annotations = analyzer.analyze(&text, current_offset);
+            let annotations = analyzer.analyze(&text, current_offset)?;
             let chunk = AnnotationChunk { annotations };
             save_chunk(root_path, chunk_index, &chunk)?;
 
@@ -169,7 +174,7 @@ impl AnnotationCache {
     }
 }
 
-pub fn annotation_path_for_book(book_path: &Path) -> PathBuf {
+pub fn annotation_path_for_book(book_path: &Path, analyzer_id: &str) -> PathBuf {
     let mut hasher = DefaultHasher::new();
     book_path.to_string_lossy().hash(&mut hasher);
     let book_hash = hasher.finish();
@@ -177,6 +182,7 @@ pub fn annotation_path_for_book(book_path: &Path) -> PathBuf {
     PathBuf::from(".reading")
         .join("annotations")
         .join(format!("{book_hash:016x}"))
+        .join(analyzer_id)
 }
 
 fn manifest_path(root_path: &Path) -> PathBuf {

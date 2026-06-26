@@ -111,5 +111,8 @@ fn style_for_kind(kind: AnnotationKind) -> Style {
         AnnotationKind::Pronoun => Style::default().fg(Color::Cyan),
         AnnotationKind::Adverb => Style::default().fg(Color::Yellow),
         AnnotationKind::Adjective => Style::default().fg(Color::Magenta),
+        AnnotationKind::Person => Style::default().fg(Color::LightRed),
+        AnnotationKind::Location => Style::default().fg(Color::LightBlue),
+        AnnotationKind::Organization => Style::default().fg(Color::LightYellow),
     }
 }

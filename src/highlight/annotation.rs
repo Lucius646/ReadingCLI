@@ -7,6 +7,9 @@ pub enum AnnotationKind {
     Pronoun,
     Adverb,
     Adjective,
+    Person,
+    Location,
+    Organization,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

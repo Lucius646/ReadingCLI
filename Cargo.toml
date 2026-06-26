@@ -15,6 +15,7 @@ fake = { version = "5", features = ["chrono"] }
 humansize = "2"
 humantime = "2"
 jieba-rs = "0.10"
+ltp = { version = "0.1.9", features = ["serialization"] }
 unicode-width = "0.2"
 ratatui = "0.29"
 rand = "0.10"
